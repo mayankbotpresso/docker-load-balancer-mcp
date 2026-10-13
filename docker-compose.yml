@@ -1,5 +1,4 @@
 name: ab-demo
-
 services:
   container-a:
     build: .
@@ -9,7 +8,6 @@ services:
     ports:
       - "3001:3000"
     stop_grace_period: 30s
-
   container-b:
     build: .
     image: ab-demo
@@ -18,3 +16,21 @@ services:
     ports:
       - "3002:3000"
     stop_grace_period: 30s
+  controller:
+    build:
+      context: .
+      dockerfile: controller/Dockerfile
+    ports:
+      - "9080:9080"
+      - "9081:9081"
+    environment:
+      BACKEND_HOST: host.docker.internal
+      LB_PORT: 9080
+      UI_PORT: 9081
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - container-a
+      - container-b
