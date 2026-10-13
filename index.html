@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A/B Controller</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1a1d23; --muted: #6b7280; --border: #e2e5ea; --soft: #f0f2f5;
+    --a: #2f6fde; --b: #d97a1e;
+    --ok: #1e9e57; --bad: #d64040; --warn: #c88a06; --info: #5b6b80; --idle: #9aa3b2; --busy: #7c5cd6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1115; --panel: #161a20; --text: #e5e8ed; --muted: #8b94a3; --border: #262c35; --soft: #1d222a;
+      --a: #5b8ff0; --b: #ec9a4c;
+      --ok: #3cba6f; --bad: #ef6464; --warn: #e2ab2f; --info: #8d9bb0; --idle: #6b7586; --busy: #9d83f0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 16px; font-weight: 650; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  header .meta code { color: var(--text); }
+  .conn { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  #docker-error { display: none; margin: 16px auto 0; max-width: 1200px; padding: 10px 14px; border-radius: 8px;
+    border: 1px solid var(--bad); color: var(--bad); background: var(--panel); }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  h2 { margin: 0 0 12px; font-size: 12px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .spacer { flex: 1; }
+
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--soft); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--text); color: var(--panel); border-color: var(--text); }
+  button.danger { color: var(--bad); }
+  input, select { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); }
+  input[type=number] { width: 72px; }
+  label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+
+  /* Container cards */
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; }
+  .card-head .name { font-weight: 650; font-size: 16px; }
+  .card-head .sub { color: var(--muted); font-size: 12px; }
+  .badge { margin-left: auto; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; color: #fff; background: var(--idle); text-transform: capitalize; }
+  .badge.healthy { background: var(--ok); } .badge.unhealthy { background: var(--bad); }
+  .badge.draining, .badge.stopping { background: var(--warn); } .badge.starting { background: var(--busy); }
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat .v.small { font-size: 14px; padding-top: 3px; }
+  @media (max-width: 480px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  /* Split bars */
+  .bar-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  .bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; background: var(--soft); }
+  .bar div { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 600;
+    transition: width .4s ease; white-space: nowrap; overflow: hidden; }
+  .bar .a { background: var(--a); } .bar .b { background: var(--b); }
+  .bar .none { width: 100%; color: var(--bad); }
+  .reason { font-size: 12px; margin-top: 6px; color: var(--muted); min-height: 18px; }
+  .reason.warn { color: var(--warn); } .reason.bad { color: var(--bad); }
+  .split-form { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .presets button { padding: 4px 8px; font-size: 12px; }
+  .sum { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .sum.bad { color: var(--bad); }
+  input[type=range] { width: 100%; margin: 10px 0 4px; accent-color: var(--a); }
+  .lbstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+  /* Rollout */
+  .steps { list-style: none; margin: 14px 0 0; padding: 0; }
+  .steps li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .steps li:last-child { border-bottom: 0; }
+  .steps .icon { width: 18px; text-align: center; font-weight: 700; flex: none; }
+  .steps .detail { color: var(--muted); font-size: 12px; margin-left: auto; text-align: right; }
+  .st-pending .icon, .st-cancelled .icon { color: var(--idle); } .st-cancelled { color: var(--muted); }
+  .st-active .icon { color: var(--busy); } .st-done .icon { color: var(--ok); }
+  .st-skipped .icon { color: var(--info); } .st-failed .icon { color: var(--bad); }
+  .rollout-status { margin-top: 12px; font-size: 13px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; background: var(--idle); }
+  .pill.running { background: var(--busy); } .pill.succeeded { background: var(--ok); }
+  .pill.aborted { background: var(--warn); } .pill.failed { background: var(--bad); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  /* Traffic generator */
+  .gen-stats { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  @media (max-width: 860px) { .gen-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .gen-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .rate { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--soft); margin-top: 12px; }
+  .rate .ok { background: var(--ok); } .rate .bad { background: var(--bad); }
+  .ok-text { color: var(--ok); } .bad-text { color: var(--bad); }
+
+  /* Event log */
+  .log-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { position: sticky; top: 0; background: var(--soft); text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 7px 10px; }
+  td { padding: 6px 10px; border-top: 1px solid var(--border); vertical-align: top; }
+  td.time { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  td.action { font-weight: 600; white-space: nowrap; }
+  td.source { white-space: nowrap; }
+  .res { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .res.ok { color: var(--ok); } .res.failed { color: var(--bad); } .res.rejected { color: var(--bad); }
+  .res.warning, .res.aborted { color: var(--warn); } .res.info { color: var(--info); }
+
+  #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 20; max-width: calc(100vw - 32px); }
+  .toast { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--ok); border-radius: 8px;
+    padding: 10px 14px; box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 13px; max-width: 420px; }
+  .toast.bad { border-left-color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>A/B Controller</h1>
+  <span class="meta">Load balancer: <code id="lb-url">http://localhost:9080</code></span>
+  <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+</header>
+<div id="docker-error"></div>
+
+<main>
+  <section class="panel" id="card-A"></section>
+  <section class="panel" id="card-B"></section>
+
+  <section class="panel">
+    <h2>Traffic split</h2>
+    <div class="bar-label"><span>Configured</span><span id="cfg-text"></span></div>
+    <div class="bar" id="cfg-bar"></div>
+    <div class="bar-label"><span>Effective (what the router actually does)</span><span id="eff-text"></span></div>
+    <div class="bar" id="eff-bar"></div>
+    <div class="reason" id="eff-reason"></div>
+
+    <div class="split-form">
+      <div class="row">
+        <label>A % <input type="number" id="in-a" min="0" max="100" step="1"></label>
+        <label>B % <input type="number" id="in-b" min="0" max="100" step="1"></label>
+        <span class="sum" id="sum"></span>
+        <span class="spacer"></span>
+        <button class="primary" id="apply-split">Apply split</button>
+      </div>
+      <input type="range" id="slider" min="0" max="100" step="5" aria-label="Percentage of traffic to A">
+      <div class="row presets">
+        <span class="hint" style="margin:0">Presets (A/B):</span>
+        <button data-preset="100">100/0</button><button data-preset="90">90/10</button>
+        <button data-preset="50">50/50</button><button data-preset="10">10/90</button><button data-preset="0">0/100</button>
+      </div>
+    </div>
+
+    <div class="lbstats">
+      <div class="stat"><div class="k">LB requests</div><div class="v" id="lb-total">0</div></div>
+      <div class="stat"><div class="k">503 no backend</div><div class="v" id="lb-503">0</div></div>
+      <div class="stat"><div class="k">502 errors</div><div class="v" id="lb-502">0</div></div>
+      <div class="stat"><div class="k">Retries</div><div class="v" id="lb-retries">0</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Safe rollout</h2>
+    <div class="row">
+      <label>Target <select id="ro-target"><option value="A">A</option><option value="B">B</option></select></label>
+      <label>Timeout <input type="number" id="ro-timeout" value="30" min="5" max="300"> s</label>
+      <span class="spacer"></span>
+      <button class="primary" id="ro-start">Start rollout</button>
+    </div>
+    <div class="hint">Start target → wait until healthy → move 100% traffic → drain old → stop old. Aborts and rolls back on timeout or if the target turns unhealthy.</div>
+    <div class="rollout-status" id="ro-status">No rollout yet.</div>
+    <ul class="steps" id="ro-steps"></ul>
+  </section>
+
+  <section class="panel wide">
+    <h2>Traffic generator</h2>
+    <div class="row">
+      <label>Requests / min <input type="number" id="gen-rpm" min="1" max="6000" value="120"></label>
+      <label>Path <input type="text" id="gen-path" value="/" style="width:170px" list="paths"></label>
+      <datalist id="paths"><option value="/"><option value="/delay?ms=3000"><option value="/delay?ms=15000"></datalist>
+      <button class="primary" id="gen-start">Start</button>
+      <button id="gen-stop">Stop</button>
+      <span class="spacer"></span>
+      <span class="hint" style="margin:0" id="gen-state">Stopped</span>
+      <button id="reset">Reset counters</button>
+    </div>
+    <div class="gen-stats">
+      <div class="stat"><div class="k">Sent</div><div class="v" id="g-sent">0</div></div>
+      <div class="stat"><div class="k">Success</div><div class="v ok-text" id="g-ok">0</div></div>
+      <div class="stat"><div class="k">Failed</div><div class="v bad-text" id="g-fail">0</div></div>
+      <div class="stat"><div class="k">Success rate</div><div class="v" id="g-rate">–</div></div>
+      <div class="stat"><div class="k">In flight</div><div class="v" id="g-inflight">0</div></div>
+      <div class="stat"><div class="k">Served by A</div><div class="v" id="g-a" style="color:var(--a)">0</div></div>
+      <div class="stat"><div class="k">Served by B</div><div class="v" id="g-b" style="color:var(--b)">0</div></div>
+    </div>
+    <div class="rate" id="g-bar"></div>
+    <div class="hint" id="g-last60"></div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Event log</h2>
+    <div class="log-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Action</th><th>Source</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<div id="toasts"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+const fmt = (n) => Number(n).toLocaleString();
+
+// ---- API helpers --------------------------------------------------------
+function toast(msg, kind = "ok") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), kind === "bad" ? 6000 : 3000);
+}
+
+async function api(path, body = {}) {
+  try {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Source": "ui" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) toast(j.error || `HTTP ${r.status}`, "bad");
+    else if (j.message) toast(j.message);
+    return r.ok;
+  } catch (e) {
+    toast(e.message, "bad");
+    return false;
+  }
+}
+
+// ---- Container cards (built once, updated in place) ----------------------
+for (const id of ["A", "B"]) {
+  $(`card-${id}`).innerHTML = `
+    <div class="card-head">
+      <span class="swatch" style="background:var(--${id.toLowerCase()})"></span>
+      <div><div class="name">Container ${id}</div><div class="sub">container-${id.toLowerCase()} · localhost:${id === "A" ? 3001 : 3002}</div></div>
+      <span class="badge" data-f="status">–</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Docker</div><div class="v small" data-f="docker">–</div></div>
+      <div class="stat"><div class="k">Health check</div><div class="v small" data-f="health">–</div></div>
+      <div class="stat"><div class="k">Weight cfg → eff</div><div class="v small" data-f="weight">–</div></div>
+      <div class="stat"><div class="k">In flight</div><div class="v" data-f="inflight">0</div></div>
+      <div class="stat"><div class="k">Requests</div><div class="v" data-f="requests">0</div></div>
+      <div class="stat"><div class="k">Success</div><div class="v ok-text" data-f="success">0</div></div>
+      <div class="stat"><div class="k">Failed</div><div class="v bad-text" data-f="failed">0</div></div>
+    </div>
+    <div class="row">
+      <button data-act="start" data-id="${id}">Start</button>
+      <button data-act="stop" data-id="${id}">Stop</button>
+      <span class="spacer"></span>
+      <button class="danger" data-act="fail" data-id="${id}">Force unhealthy</button>
+      <button data-act="recover" data-id="${id}">Recover</button>
+    </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (b) api(`/api/containers/${b.dataset.id}/${b.dataset.act}`);
+});
+
+// ---- Split form ----------------------------------------------------------
+let splitDirty = false;
+function setInputs(a, b) {
+  $("in-a").value = a;
+  $("in-b").value = b;
+  $("slider").value = a;
+  updateSum();
+}
+function updateSum() {
+  const s = Number($("in-a").value) + Number($("in-b").value);
+  $("sum").textContent = `Sum: ${s}`;
+  $("sum").className = `sum ${s === 100 ? "" : "bad"}`;
+}
+$("in-a").addEventListener("input", () => { splitDirty = true; updateSum(); });
+$("in-b").addEventListener("input", () => { splitDirty = true; updateSum(); });
+$("slider").addEventListener("input", (e) => { splitDirty = true; setInputs(+e.target.value, 100 - e.target.value); });
+document.querySelectorAll("[data-preset]").forEach((b) =>
+  b.addEventListener("click", () => { splitDirty = true; setInputs(+b.dataset.preset, 100 - b.dataset.preset); }));
+$("apply-split").addEventListener("click", async () => {
+  const ok = await api("/api/split", { A: Number($("in-a").value), B: Number($("in-b").value) });
+  if (ok) splitDirty = false;
+});
+
+// ---- Rollout / generator controls -----------------------------------------
+$("ro-start").addEventListener("click", () =>
+  api("/api/rollout", { target: $("ro-target").value, timeoutSec: Number($("ro-timeout").value) }));
+$("gen-start").addEventListener("click", () =>
+  api("/api/traffic/start", { rpm: Number($("gen-rpm").value), path: $("gen-path").value }));
+$("gen-stop").addEventListener("click", () => api("/api/traffic/stop"));
+$("reset").addEventListener("click", () => api("/api/counters/reset"));
+
+// ---- Rendering -------------------------------------------------------------
+function barHTML(a, b) {
+  if (a + b === 0) return `<div class="none">no traffic - 503</div>`;
+  return `<div class="a" style="width:${a}%">${a ? `A ${a}%` : ""}</div><div class="b" style="width:${b}%">${b ? `B ${b}%` : ""}</div>`;
+}
+
+const STEP_ICON = { pending: "○", active: "●", done: "✓", skipped: "–", failed: "✕", cancelled: "○" };
+let genInit = false;
+let lastLogKey = "";
+
+function render(s) {
+  $("lb-url").textContent = `http://localhost:${s.lbPort}`;
+  const de = $("docker-error");
+  de.style.display = s.dockerError ? "block" : "none";
+  de.textContent = s.dockerError ? `Docker problem: ${s.dockerError}` : "";
+
+  for (const c of s.containers) {
+    const card = $(`card-${c.id}`);
+    const f = (name) => card.querySelector(`[data-f="${name}"]`);
+    f("status").textContent = c.status;
+    f("status").className = `badge ${c.status}`;
+    f("docker").textContent = c.dockerState;
+    f("health").textContent = c.dockerState === "running" ? c.healthDetail : "–";
+    f("health").style.color = c.dockerState !== "running" ? "" : c.healthy ? "var(--ok)" : "var(--bad)";
+    f("weight").textContent = `${s.split[c.id]}% → ${s.effective[c.id]}%`;
+    f("inflight").textContent = fmt(c.inFlight);
+    f("requests").textContent = fmt(c.requests);
+    f("success").textContent = fmt(c.success);
+    f("failed").textContent = fmt(c.failed);
+  }
+
+  $("cfg-bar").innerHTML = barHTML(s.split.A, s.split.B);
+  $("eff-bar").innerHTML = barHTML(s.effective.A, s.effective.B);
+  $("cfg-text").textContent = `A ${s.split.A} / B ${s.split.B}`;
+  $("eff-text").textContent = `A ${s.effective.A} / B ${s.effective.B}`;
+  const reason = $("eff-reason");
+  reason.textContent = s.effective.reason === "as configured" ? "Routing as configured." : s.effective.reason;
+  reason.className = `reason ${s.effective.A + s.effective.B === 0 ? "bad" : s.effective.reason === "as configured" ? "" : "warn"}`;
+  if (!splitDirty) setInputs(s.split.A, s.split.B);
+
+  $("lb-total").textContent = fmt(s.lb.total);
+  $("lb-503").textContent = fmt(s.lb.unavailable);
+  $("lb-502").textContent = fmt(s.lb.badGateway);
+  $("lb-retries").textContent = fmt(s.lb.retries);
+
+  const r = s.rollout;
+  if (r) {
+    const when = new Date(r.startedAt).toLocaleTimeString();
+    $("ro-status").innerHTML = `Rollout ${esc(r.from)} → ${esc(r.target)} <span class="pill ${r.status}">${esc(r.status)}</span>
+      <span class="hint">started ${when}</span>${r.detail ? `<div class="hint">${esc(r.detail)}</div>` : ""}`;
+    $("ro-steps").innerHTML = r.steps.map((st) =>
+      `<li class="st-${st.status}"><span class="icon">${STEP_ICON[st.status] || "○"}</span><span>${esc(st.name)}</span><span class="detail">${esc(st.detail || st.status)}</span></li>`).join("");
+  }
+
+  const g = s.gen;
+  if (!genInit) { $("gen-rpm").value = g.rpm; $("gen-path").value = g.path; genInit = true; }
+  $("gen-state").textContent = g.running ? `Running: ${g.rpm} req/min → GET ${g.path}` : "Stopped";
+  $("gen-state").style.color = g.running ? "var(--ok)" : "";
+  $("g-sent").textContent = fmt(g.sent);
+  $("g-ok").textContent = fmt(g.success);
+  $("g-fail").textContent = fmt(g.failed);
+  const done = g.success + g.failed;
+  $("g-rate").textContent = done ? `${(100 * g.success / done).toFixed(1)}%` : "–";
+  $("g-inflight").textContent = fmt(g.inFlight);
+  $("g-a").textContent = fmt(g.byContainer.A);
+  $("g-b").textContent = fmt(g.byContainer.B);
+  const l = g.last60;
+  const okPct = l.completed ? (100 * l.success / l.completed) : 0;
+  $("g-bar").innerHTML = l.completed ? `<div class="ok" style="width:${okPct}%"></div><div class="bad" style="width:${100 - okPct}%"></div>` : "";
+  $("g-last60").textContent = l.completed
+    ? `Last 60s: ${fmt(l.completed)} completed, ${fmt(l.success)} ok, ${fmt(l.failed)} failed (${okPct.toFixed(1)}% success)`
+    : "Last 60s: no completed requests";
+
+  const key = s.events.length + "|" + (s.events[0] && s.events[0].time + s.events[0].detail);
+  if (key !== lastLogKey) {
+    lastLogKey = key;
+    $("log").innerHTML = s.events.map((e) => `<tr>
+      <td class="time">${new Date(e.time).toLocaleTimeString()}</td>
+      <td class="action">${esc(e.action)}</td>
+      <td class="source">${esc(e.source)}</td>
+      <td><span class="res ${esc(e.result)}">${esc(e.result)}</span></td>
+      <td>${esc(e.detail)}</td></tr>`).join("");
+  }
+}
+
+// ---- Live updates (Server-Sent Events) -------------------------------------
+function connect() {
+  const es = new EventSource("/api/stream");
+  es.onopen = () => { $("conn-dot").className = "dot on"; $("conn-text").textContent = "live"; };
+  es.onerror = () => { $("conn-dot").className = "dot"; $("conn-text").textContent = "reconnecting…"; };
+  es.onmessage = (m) => render(JSON.parse(m.data));
+}
+connect();
+</script>
+</body>
+</html>

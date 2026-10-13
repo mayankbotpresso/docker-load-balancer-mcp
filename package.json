@@ -1,13 +1,12 @@
 {
-  "name": "ab-controller",
+  "name": "ab-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "Controller + load balancer for the ab-demo containers",
-  "main": "controller.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node controller.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1"
+    "express": "^4.21.2"
   }
 }
